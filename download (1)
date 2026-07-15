@@ -1,0 +1,31 @@
+export interface ParsedOwnerCommand {
+  name: string;
+  arguments: string;
+}
+
+export function parseOwnerCommand(text: string | undefined): ParsedOwnerCommand | null {
+  if (!text) {
+    return null;
+  }
+  const match = /^\/(?<name>[a-z_]+)(?:@[A-Za-z0-9_]+)?(?:\s+(?<arguments>[\s\S]*))?$/iu.exec(
+    text.trim(),
+  );
+  if (!match?.groups?.name) {
+    return null;
+  }
+  return {
+    name: match.groups.name.toLowerCase(),
+    arguments: match.groups.arguments?.trim() ?? "",
+  };
+}
+
+export function parseToggle(value: string): boolean | undefined {
+  const normalized = value.trim().toLowerCase();
+  if (["on", "true", "1", "yes", "да", "вкл"].includes(normalized)) {
+    return true;
+  }
+  if (["off", "false", "0", "no", "нет", "выкл"].includes(normalized)) {
+    return false;
+  }
+  return undefined;
+}

@@ -1,0 +1,94 @@
+import { config as loadEnv } from "dotenv";
+import { DateTime } from "luxon";
+import { z } from "zod";
+
+loadEnv({ path: ".env.local", quiet: true });
+loadEnv({ path: ".env", quiet: true });
+
+const optionalNumber = (minimum = 0) =>
+  z.preprocess(
+    (value) => (value === "" || value === undefined ? undefined : value),
+    z.coerce.number().finite().min(minimum).optional(),
+  );
+
+const envSchema = z
+  .object({
+    NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
+    PORT: z.coerce.number().int().min(1).max(65_535).default(3000),
+    LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"]).default("info"),
+    PUBLIC_BASE_URL: z.string().url(),
+
+    TELEGRAM_BOT_TOKEN: z
+      .string()
+      .regex(/^\d{6,}:[A-Za-z0-9_-]{20,}$/, "Invalid Telegram bot token format"),
+    TELEGRAM_OWNER_ID: z.string().regex(/^\d+$/, "Telegram owner ID must be a positive integer"),
+    TELEGRAM_WEBHOOK_SECRET: z
+      .string()
+      .min(16)
+      .max(256)
+      .regex(/^[A-Za-z0-9_-]+$/, "Telegram webhook secret contains unsupported characters"),
+
+    AI_PROVIDER: z.enum(["openai", "gemini"]).default("openai"),
+    OPENAI_API_KEY: z.string().min(20).optional(),
+    OPENAI_MODEL: z.string().min(1).default("gpt-5.4"),
+    GEMINI_API_KEY: z.string().min(20).optional(),
+    GEMINI_MODEL: z.string().min(1).default("gemini-3.5-flash"),
+    AI_INPUT_COST_PER_MILLION: optionalNumber(),
+    AI_OUTPUT_COST_PER_MILLION: optionalNumber(),
+    AI_REQUEST_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(600_000).default(60_000),
+
+    DATABASE_URL: z
+      .string()
+      .refine(
+        (value) => value.startsWith("postgresql://") || value.startsWith("postgres://"),
+        "DATABASE_URL must be a PostgreSQL URL",
+      ),
+    DEFAULT_TIMEZONE: z
+      .string()
+      .default("Europe/Kyiv")
+      .refine((value) => DateTime.local().setZone(value).isValid, "Invalid IANA timezone"),
+    WORKER_POLL_MS: z.coerce.number().int().min(100).max(10_000).default(500),
+    HEALTH_CACHE_TTL_MS: z.coerce.number().int().min(1_000).max(300_000).default(30_000),
+  })
+  .superRefine((values, context) => {
+    if (values.AI_PROVIDER === "openai" && !values.OPENAI_API_KEY) {
+      context.addIssue({
+        code: "custom",
+        path: ["OPENAI_API_KEY"],
+        message: "OPENAI_API_KEY is required when AI_PROVIDER=openai",
+      });
+    }
+
+    if (values.AI_PROVIDER === "gemini" && !values.GEMINI_API_KEY) {
+      context.addIssue({
+        code: "custom",
+        path: ["GEMINI_API_KEY"],
+        message: "GEMINI_API_KEY is required when AI_PROVIDER=gemini",
+      });
+    }
+
+    if (values.NODE_ENV === "production" && !values.PUBLIC_BASE_URL.startsWith("https://")) {
+      context.addIssue({
+        code: "custom",
+        path: ["PUBLIC_BASE_URL"],
+        message: "PUBLIC_BASE_URL must use HTTPS in production",
+      });
+    }
+  });
+
+const parsed = envSchema.safeParse(process.env);
+
+if (!parsed.success) {
+  const summary = parsed.error.issues
+    .map((issue) => `${issue.path.join(".") || "environment"}: ${issue.message}`)
+    .join("; ");
+  throw new Error(`Invalid environment configuration: ${summary}`);
+}
+
+export const env = {
+  ...parsed.data,
+  PUBLIC_BASE_URL: parsed.data.PUBLIC_BASE_URL.replace(/\/+$/, ""),
+  TELEGRAM_OWNER_ID_BIGINT: BigInt(parsed.data.TELEGRAM_OWNER_ID),
+};
+
+export type AppEnv = typeof env;

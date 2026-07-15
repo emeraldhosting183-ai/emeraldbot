@@ -1,0 +1,98 @@
+import { GoogleGenAI } from "@google/genai";
+
+import type {
+  AiGenerationResult,
+  AiProvider,
+  GenerateReplyRequest,
+} from "./ai-provider.js";
+import { EmptyAiResponseError } from "./ai-provider.js";
+import { withRetry } from "../utils/retry.js";
+
+interface GeminiErrorShape {
+  status?: number;
+  code?: number | string;
+}
+
+export class GeminiProvider implements AiProvider {
+  public readonly provider = "GEMINI" as const;
+  public readonly model: string;
+  private readonly client: GoogleGenAI;
+  private readonly timeoutMs: number;
+
+  public constructor(options: {
+    apiKey: string;
+    model: string;
+    timeoutMs: number;
+  }) {
+    this.model = options.model;
+    this.timeoutMs = options.timeoutMs;
+    this.client = new GoogleGenAI({ apiKey: options.apiKey });
+  }
+
+  public async generateReply(
+    request: GenerateReplyRequest,
+  ): Promise<AiGenerationResult> {
+    const startedAt = Date.now();
+    const response = await withRetry(
+      () =>
+        this.client.models.generateContent({
+          model: this.model,
+          contents: request.messages.map((message) => ({
+            role: message.role === "assistant" ? "model" : "user",
+            parts: [{ text: message.text }],
+          })),
+          config: {
+            systemInstruction: request.instructions,
+            maxOutputTokens: request.maxOutputTokens,
+            abortSignal: request.signal,
+            httpOptions: { timeout: this.timeoutMs },
+          },
+        }),
+      {
+        attempts: 4,
+        initialDelayMs: 500,
+        maxDelayMs: 8_000,
+        signal: request.signal,
+        shouldRetry: isRetryableGeminiError,
+      },
+    );
+
+    const text = response.text?.trim();
+    if (!text) {
+      throw new EmptyAiResponseError();
+    }
+
+    return {
+      text,
+      provider: this.provider,
+      model: response.modelVersion ?? this.model,
+      ...(response.responseId ? { responseId: response.responseId } : {}),
+      inputTokens: response.usageMetadata?.promptTokenCount ?? 0,
+      outputTokens: response.usageMetadata?.candidatesTokenCount ?? 0,
+      totalTokens: response.usageMetadata?.totalTokenCount ?? 0,
+      latencyMs: Date.now() - startedAt,
+    };
+  }
+
+  public async checkConnection(signal?: AbortSignal): Promise<void> {
+    await this.client.models.get({
+      model: this.model,
+      ...(signal ? { config: { abortSignal: signal } } : {}),
+    });
+  }
+}
+
+function isRetryableGeminiError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  const candidate = error as Error & GeminiErrorShape;
+  const status =
+    typeof candidate.status === "number"
+      ? candidate.status
+      : typeof candidate.code === "number"
+        ? candidate.code
+        : Number(candidate.code);
+  return status === 408 || status === 429 || status >= 500;
+}

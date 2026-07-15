@@ -1,0 +1,67 @@
+import OpenAI from "openai";
+
+import type {
+  AiGenerationResult,
+  AiProvider,
+  GenerateReplyRequest,
+} from "./ai-provider.js";
+import { EmptyAiResponseError } from "./ai-provider.js";
+
+export class OpenAiProvider implements AiProvider {
+  public readonly provider = "OPENAI" as const;
+  public readonly model: string;
+  private readonly client: OpenAI;
+
+  public constructor(options: {
+    apiKey: string;
+    model: string;
+    timeoutMs: number;
+  }) {
+    this.model = options.model;
+    this.client = new OpenAI({
+      apiKey: options.apiKey,
+      maxRetries: 4,
+      timeout: options.timeoutMs,
+      logLevel: "off",
+    });
+  }
+
+  public async generateReply(
+    request: GenerateReplyRequest,
+  ): Promise<AiGenerationResult> {
+    const startedAt = Date.now();
+    const response = await this.client.responses.create(
+      {
+        model: this.model,
+        instructions: request.instructions,
+        input: request.messages.map((message) => ({
+          role: message.role,
+          content: message.text,
+        })),
+        max_output_tokens: request.maxOutputTokens,
+        store: false,
+      },
+      { signal: request.signal },
+    );
+
+    const text = response.output_text.trim();
+    if (!text) {
+      throw new EmptyAiResponseError();
+    }
+
+    return {
+      text,
+      provider: this.provider,
+      model: this.model,
+      responseId: response.id,
+      inputTokens: response.usage?.input_tokens ?? 0,
+      outputTokens: response.usage?.output_tokens ?? 0,
+      totalTokens: response.usage?.total_tokens ?? 0,
+      latencyMs: Date.now() - startedAt,
+    };
+  }
+
+  public async checkConnection(signal?: AbortSignal): Promise<void> {
+    await this.client.models.retrieve(this.model, { signal });
+  }
+}

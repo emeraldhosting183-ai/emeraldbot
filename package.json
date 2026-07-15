@@ -1,0 +1,26 @@
+import type { AppEnv } from "../config/env.js";
+import type { AiProvider } from "./ai-provider.js";
+import { GeminiProvider } from "./gemini-provider.js";
+import { OpenAiProvider } from "./openai-provider.js";
+
+export function createAiProvider(configuration: AppEnv): AiProvider {
+  if (configuration.AI_PROVIDER === "gemini") {
+    if (!configuration.GEMINI_API_KEY) {
+      throw new Error("GEMINI_API_KEY is not configured");
+    }
+    return new GeminiProvider({
+      apiKey: configuration.GEMINI_API_KEY,
+      model: configuration.GEMINI_MODEL,
+      timeoutMs: configuration.AI_REQUEST_TIMEOUT_MS,
+    });
+  }
+
+  if (!configuration.OPENAI_API_KEY) {
+    throw new Error("OPENAI_API_KEY is not configured");
+  }
+  return new OpenAiProvider({
+    apiKey: configuration.OPENAI_API_KEY,
+    model: configuration.OPENAI_MODEL,
+    timeoutMs: configuration.AI_REQUEST_TIMEOUT_MS,
+  });
+}
